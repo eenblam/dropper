@@ -14,10 +14,17 @@ struct ipv4_lpm_key {
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
     __type(key, struct ipv4_lpm_key);
-    __type(value, __u32);
+    __type(value, __u64);
     __uint(map_flags, BPF_F_NO_PREALLOC);
     __uint(max_entries, 255);  //TODO Define a SET_BY_USERSPACE=0 constant; this will fail verification if not updated by userspace
 } ipv4_lpm_trie SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u64);
+    __type(value, __u64);
+    __uint(max_entries, 255); //TODO make this scalable
+} stats_map SEC(".maps");
 
 // drop_packets_by_ip drops packets based on the source IP address.
 SEC("xdp")
@@ -43,9 +50,14 @@ int drop_packets_by_ip(struct xdp_md *ctx) {
         .prefixlen = 32,
         .data = ip->saddr,
     };
-    __u32 *value = bpf_map_lookup_elem(&ipv4_lpm_trie, &key);
-    if (value) {
-        __sync_fetch_and_add(value, 1);
+    __u64 *rule_id = bpf_map_lookup_elem(&ipv4_lpm_trie, &key);
+    if (rule_id) {
+        // Update stats
+        __u64 *stats = bpf_map_lookup_elem(&stats_map, rule_id);
+        if (stats) {
+            __sync_fetch_and_add(stats, 1);
+        }
+
         return XDP_DROP;
     }
 

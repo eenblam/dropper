@@ -66,6 +66,7 @@ type dropperProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type dropperMapSpecs struct {
 	Ipv4LpmTrie *ebpf.MapSpec `ebpf:"ipv4_lpm_trie"`
+	StatsMap    *ebpf.MapSpec `ebpf:"stats_map"`
 }
 
 // dropperObjects contains all objects after they have been loaded into the kernel.
@@ -88,11 +89,13 @@ func (o *dropperObjects) Close() error {
 // It can be passed to loadDropperObjects or ebpf.CollectionSpec.LoadAndAssign.
 type dropperMaps struct {
 	Ipv4LpmTrie *ebpf.Map `ebpf:"ipv4_lpm_trie"`
+	StatsMap    *ebpf.Map `ebpf:"stats_map"`
 }
 
 func (m *dropperMaps) Close() error {
 	return _DropperClose(
 		m.Ipv4LpmTrie,
+		m.StatsMap,
 	)
 }
 

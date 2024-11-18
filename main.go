@@ -67,6 +67,7 @@ func main() {
 
 	go pullStats(ctx, &objs)
 
+	var statsKey uint64
 	for {
 		select {
 		case update, ok := <-ipCh:
@@ -75,17 +76,23 @@ func main() {
 				stop()
 				return
 			}
+			statsKey = keyToUint64(update.Key)
 			//TODO Handle no space left by resizing map
 			if update.Sign == "+" {
-				//TODO if you pass the same IP twice, the stats reset to 0! Make this idempotent.
-				// Trie doesn't support ebpf.UpdateNoExist - it's treated as Any,
-				// so instead we should store a rule ID here and use a separate map of ID:stats.
-				err := objs.Ipv4LpmTrie.Put(update.Key, uint32(0))
+				// UpdateNoExist is supported for a Hash. This way, we only create stats once.
+				err = objs.StatsMap.Update(statsKey, uint64(0), ebpf.UpdateNoExist)
 				if err != nil {
-					log.Fatal("Map put:", err)
+					log.Printf("StatsMap update: %s", err)
+				}
+				// LPM Trie doesn't support ebpf.UpdateNoExist - it's treated as Any,
+				// so instead we should store a rule ID here and use a separate map of ID:stats.
+				// (Currently, the rule is just a uint64 version of the key.)
+				err = objs.Ipv4LpmTrie.Put(update.Key, statsKey)
+				if err != nil {
+					log.Fatal("Ipv4LpmTrie put:", err)
 				}
 			} else if update.Sign == "-" {
-				err := objs.Ipv4LpmTrie.Delete(update.Key)
+				err = objs.Ipv4LpmTrie.Delete(update.Key)
 				if errors.Is(err, ebpf.ErrKeyNotExist) {
 					log.Printf("Key does not exist: %v", update.Key)
 					continue
@@ -162,26 +169,47 @@ func readStdinLines(ch chan<- *update) {
 // pullStats periodically reads the stats from the eBPF map and logs them.
 func pullStats(ctx context.Context, objs *dropperObjects) {
 	var (
-		stats        = make(map[string]uint32)
-		statsTick    = time.Tick(time.Second)
-		statsKey     dropperIpv4LpmKey
-		statsValue   uint32
-		statsKeyAddr net.IP
-		statsKeyCIDR net.IPNet
+		stats      = make(map[string]uint64)
+		statsTick  = time.Tick(time.Second)
+		statsKey   uint64
+		statsValue uint64
+		statsRule  net.IPNet
 	)
 	for {
 		select {
 		case <-statsTick:
-			statsEntries := objs.Ipv4LpmTrie.Iterate()
+			statsEntries := objs.StatsMap.Iterate()
 			for statsEntries.Next(&statsKey, &statsValue) {
-				statsKeyAddr = net.IPv4(byte(statsKey.Data), byte(statsKey.Data>>8), byte(statsKey.Data>>16), byte(statsKey.Data>>24))
-				statsKeyCIDR = net.IPNet{IP: statsKeyAddr, Mask: net.CIDRMask(int(statsKey.Prefixlen), 32)}
-				stats[statsKeyCIDR.String()] = statsValue
+				statsRule = uint64ToIpNet(statsKey)
+				stats[statsRule.String()] = statsValue
 			}
 			//TODO ship stats somewhere instead
 			log.Println(stats)
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// keyToIp converts an LPM key into a net.IP.
+func keyToIp(key *dropperIpv4LpmKey) net.IP {
+	return net.IPv4(byte(key.Data), byte(key.Data>>8), byte(key.Data>>16), byte(key.Data>>24))
+}
+
+// keyToUint64 converts an LPM key (a struct of two uint32's) into a uint64.
+// An LPM key is two uint32s for the IPv4 and the prefix length.
+// This just stores the IPv4 in the high bits of a uint64,
+// and the prefix length in the low bits.
+func keyToUint64(key *dropperIpv4LpmKey) uint64 {
+	return (uint64(key.Data) << 32) | uint64(key.Prefixlen)
+}
+
+// uint64ToIpNet uses the high bits of a uint64 as a network address
+// and the low bits as a prefix length in order to produce a net.IPNet.
+func uint64ToIpNet(x uint64) net.IPNet {
+	addr := net.IPv4(byte(x>>32), byte(x>>40), byte(x>>48), byte(x>>56))
+	return net.IPNet{
+		IP:   addr,
+		Mask: net.CIDRMask(int(uint32(x)), 32),
 	}
 }
