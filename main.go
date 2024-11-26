@@ -38,16 +38,21 @@ func main() {
 	}
 
 	// Remove resource limits for kernels <5.11.
-	if err := rlimit.RemoveMemlock(); err != nil {
+	if err = rlimit.RemoveMemlock(); err != nil {
 		log.Fatal("Removing memlock:", err)
 	}
 
 	// Load the compiled eBPF ELF and load it into the kernel.
 	var objs dropperObjects
-	if err := loadDropperObjects(&objs, nil); err != nil {
+	if err = loadDropperObjects(&objs, nil); err != nil {
 		log.Fatal("Loading eBPF objects:", err)
 	}
 	defer objs.Close()
+
+	// Connect tail program to jump table
+	if err = objs.JmpTable.Put(uint32(0), objs.GetStats); err != nil {
+		log.Fatalf("Failed to add stats collection to tail calls: %v", err)
+	}
 
 	// Attach program to interface.
 	xdpDropLink, err := link.AttachXDP(link.XDPOptions{
@@ -80,7 +85,7 @@ func main() {
 			//TODO Handle no space left by resizing map
 			if update.Sign == "+" {
 				// UpdateNoExist is supported for a Hash. This way, we only create stats once.
-				err = objs.StatsMap.Update(statsKey, uint64(0), ebpf.UpdateNoExist)
+				err = objs.DropStatsMap.Update(statsKey, uint64(0), ebpf.UpdateNoExist)
 				if err != nil {
 					log.Printf("StatsMap update: %s", err)
 				}
@@ -178,7 +183,7 @@ func pullStats(ctx context.Context, objs *dropperObjects) {
 	for {
 		select {
 		case <-statsTick:
-			statsEntries := objs.StatsMap.Iterate()
+			statsEntries := objs.DropStatsMap.Iterate()
 			for statsEntries.Next(&statsKey, &statsValue) {
 				statsRule = uint64ToIpNet(statsKey)
 				stats[statsRule.String()] = statsValue
