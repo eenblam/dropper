@@ -59,7 +59,7 @@ type dropperSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type dropperProgramSpecs struct {
 	DropPacketsByIp *ebpf.ProgramSpec `ebpf:"drop_packets_by_ip"`
-	GetStats        *ebpf.ProgramSpec `ebpf:"get_stats"`
+	SamplePackets   *ebpf.ProgramSpec `ebpf:"sample_packets"`
 }
 
 // dropperMapSpecs contains maps before they are loaded into the kernel.
@@ -69,6 +69,7 @@ type dropperMapSpecs struct {
 	DropStatsMap *ebpf.MapSpec `ebpf:"drop_stats_map"`
 	Ipv4LpmTrie  *ebpf.MapSpec `ebpf:"ipv4_lpm_trie"`
 	JmpTable     *ebpf.MapSpec `ebpf:"jmp_table"`
+	SampleMap    *ebpf.MapSpec `ebpf:"sample_map"`
 }
 
 // dropperObjects contains all objects after they have been loaded into the kernel.
@@ -93,6 +94,7 @@ type dropperMaps struct {
 	DropStatsMap *ebpf.Map `ebpf:"drop_stats_map"`
 	Ipv4LpmTrie  *ebpf.Map `ebpf:"ipv4_lpm_trie"`
 	JmpTable     *ebpf.Map `ebpf:"jmp_table"`
+	SampleMap    *ebpf.Map `ebpf:"sample_map"`
 }
 
 func (m *dropperMaps) Close() error {
@@ -100,6 +102,7 @@ func (m *dropperMaps) Close() error {
 		m.DropStatsMap,
 		m.Ipv4LpmTrie,
 		m.JmpTable,
+		m.SampleMap,
 	)
 }
 
@@ -108,13 +111,13 @@ func (m *dropperMaps) Close() error {
 // It can be passed to loadDropperObjects or ebpf.CollectionSpec.LoadAndAssign.
 type dropperPrograms struct {
 	DropPacketsByIp *ebpf.Program `ebpf:"drop_packets_by_ip"`
-	GetStats        *ebpf.Program `ebpf:"get_stats"`
+	SamplePackets   *ebpf.Program `ebpf:"sample_packets"`
 }
 
 func (p *dropperPrograms) Close() error {
 	return _DropperClose(
 		p.DropPacketsByIp,
-		p.GetStats,
+		p.SamplePackets,
 	)
 }
 

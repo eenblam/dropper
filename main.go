@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 )
 
@@ -26,7 +28,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	//TODO detect interface
+	//TODO detect interface automatically or accept args
 	// Can I instead iterate over net.Interfaces(), then check for FlagUp,
 	// then apply eBPF program to each such interface?
 	// Right now I think they'd share the same counter object...
@@ -45,12 +47,18 @@ func main() {
 	// Load the compiled eBPF ELF and load it into the kernel.
 	var objs dropperObjects
 	if err = loadDropperObjects(&objs, nil); err != nil {
-		log.Fatal("Loading eBPF objects:", err)
+		var verr *ebpf.VerifierError
+		if errors.As(err, &verr) {
+			fmt.Printf("%+v\n", verr) // Detailed verifier logs
+			log.Fatalf("Loading eBPF objects: %v", verr)
+		} else {
+			log.Fatalf("Loading eBPF objects: %v", err)
+		}
 	}
 	defer objs.Close()
 
 	// Connect tail program to jump table
-	if err = objs.JmpTable.Put(uint32(0), objs.GetStats); err != nil {
+	if err = objs.JmpTable.Put(uint32(0), objs.SamplePackets); err != nil {
 		log.Fatalf("Failed to add stats collection to tail calls: %v", err)
 	}
 
@@ -66,16 +74,26 @@ func main() {
 
 	log.Printf("Dropping incoming packets on %s...", ifname)
 
+	// Receive input, which is returned to this goroutine via channel
 	// 1-buffered channel to receive IPs from stdin.
-	ipCh := make(chan *update, 1)
-	go readStdinLines(ipCh)
+	ruleUpdateCh := make(chan *update, 1)
+	go readStdinLines(ruleUpdateCh)
 
-	go pullStats(ctx, &objs)
+	// Regularly poll stats
+	go pollDropStats(ctx, &objs)
 
+	// Triage packet samples for analysis
+	rb, err := ringbuf.NewReader(objs.SampleMap)
+	if err != nil {
+		log.Fatalf("failed to load ringbuf: %v", err)
+	}
+	go handlePackets(ctx, rb)
+
+	//
 	var statsKey uint64
 	for {
 		select {
-		case update, ok := <-ipCh:
+		case update, ok := <-ruleUpdateCh:
 			if !ok {
 				log.Print("Input channel closed. Exiting.")
 				stop()
@@ -171,8 +189,8 @@ func readStdinLines(ch chan<- *update) {
 
 }
 
-// pullStats periodically reads the stats from the eBPF map and logs them.
-func pullStats(ctx context.Context, objs *dropperObjects) {
+// pollDropStats periodically reads the stats of dropped packets from the eBPF map and logs them.
+func pollDropStats(ctx context.Context, objs *dropperObjects) {
 	var (
 		stats      = make(map[string]uint64)
 		statsTick  = time.Tick(time.Second)
@@ -193,6 +211,30 @@ func pullStats(ctx context.Context, objs *dropperObjects) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// handlePackets handles packet samples pulled from the ringbuf.
+func handlePackets(ctx context.Context, rb *ringbuf.Reader) {
+	var (
+		bs     []byte
+		length int
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		record, err := rb.Read()
+		if err != nil {
+			log.Printf("handlePackets: error reading record: %v", err)
+			continue
+		}
+		bs = record.RawSample
+		length = int(bs[0])
+		bs = bs[1:length]
+		log.Printf("handlePackets: %d bytes: %v", length, bs)
 	}
 }
 
