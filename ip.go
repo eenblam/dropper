@@ -135,6 +135,9 @@ func ReadIphdr(p []byte) (*Iphdr, int, error) {
 	if hdr.Version() != 4 {
 		return nil, 0, fmt.Errorf("iphdr: expected version==4, got %d (V+IHL=%02x)", hdr.Version(), hdr.VersionIHL)
 	}
+	if hdr.IHL() < 5 {
+		return nil, 0, fmt.Errorf("expected IHL>=5, got %d", hdr.IHL())
+	}
 
 	copy(hdr.SrcAddr[:], p[12:16])
 	copy(hdr.DstAddr[:], p[16:20])
