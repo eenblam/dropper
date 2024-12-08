@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"log"
 )
 
 type Layers struct {
 	Eth         *Ethhdr
 	IPv4        *Iphdr
 	IPv4Options []byte
+	TCP         *TCPHeader
+	TCPOptions  []byte
 	UDP         *UDPHeader
 }
 
@@ -35,7 +36,6 @@ func ReadLayers(p []byte) (*Layers, int, error) {
 		total += n
 		p = p[n:]
 		if o := ls.IPv4.OptionBytes(); o > 0 {
-			// Parse options
 			if o > len(p) {
 				return nil, total, fmt.Errorf("encountered IHL of %d but only %d bytes available after initial IPv4 header",
 					ls.IPv4.IHL(), len(p))
@@ -45,14 +45,28 @@ func ReadLayers(p []byte) (*Layers, int, error) {
 			p = p[o:]
 		}
 
-		// Application layer: TCP/UDP/ICMP
+		// Parse transport layer
 		switch ls.IPv4.Proto {
 		case IpProtoTCP:
+			ls.TCP, n, err = ReadTCPHeader(p)
+			total += n
+			p = p[n:]
+			if err != nil {
+				return nil, total, fmt.Errorf("failed to parse UDP header: %w", err)
+			}
+			if o := ls.TCP.OptionBytes(); o > 0 {
+				if o > len(p) {
+					return nil, total, fmt.Errorf("encountered DataOffset of %d but only %d bytes available after initial TCP header",
+						ls.TCP.DataOffset(), len(p))
+				}
+				ls.TCPOptions = append(ls.TCPOptions, p[:o]...)
+				total += o
+				p = p[o:]
+			}
 		case IpProtoUDP:
 			ls.UDP, n, err = ReadUDPHeader(p)
 			total += n
 			if err != nil {
-				log.Printf("p: %x", p)
 				return nil, total, fmt.Errorf("failed to parse UDP header: %w", err)
 			}
 		default:
