@@ -232,9 +232,23 @@ func handlePackets(ctx context.Context, rb *ringbuf.Reader) {
 			continue
 		}
 		bs = record.RawSample
+		// Length of record is specified by 1st byte. But the length shouldn't exceed the remaining size of the record!
 		length = int(bs[0])
-		bs = bs[1:length]
-		log.Printf("handlePackets: %d bytes: %v", length, bs)
+		if length > len(bs)-1 {
+			log.Printf("handlePackets: loaded illegal record; length field exceeds available size (%d>%d)",
+				length, len(bs)-1)
+		}
+		bs = bs[1 : length+1]
+		log.Printf("handlePackets: %d bytes: %02x", length, bs)
+		ls, n, err := ReadLayers(bs)
+		if err != nil {
+			log.Printf("handlePackets: error parsing packet: %v", err)
+			continue
+		}
+		if n != length {
+			log.Printf("handlePackets: only loaded %d/%d bytes of packet header", n, length)
+		}
+		log.Printf("handlePackets: layers: %+v", ls)
 	}
 }
 
